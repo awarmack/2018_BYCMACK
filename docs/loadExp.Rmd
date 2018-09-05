@@ -1,0 +1,62 @@
+---
+title: "Loading Expedition Data"
+author: "A. Warmack"
+date: "9/4/2018"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(tidyverse)
+```
+
+#Summary
+The boat performance data was collected using 
+
+# Combining Log Files
+```{r}
+dat_folder <- "../raw_data/expedition_data"
+
+#get the list of log files
+dat_files <- list.files(dat_folder, full.names = TRUE)
+
+#Read the csv files
+exp <- lapply(dat_files, read.csv, stringsAsFactors=FALSE)
+exp_raw <- do.call(rbind, exp)
+```
+
+##Cleaning Up The Data
+###Removing Unneeded Columns
+The Expedition data contains many columns that do not contain any data. 
+```{r}
+#remove any columns where the data is entirely NA
+allna <- which(apply(exp_raw, 2, function(x) all(is.na(x))))   #Find columns where all is not NA
+
+exp <- exp_raw %>% select(-allna)
+```
+
+###Convert the time from Excel Format
+```{r}
+exp$time <- as.POSIXct((exp$Utc) * (60*60*24), origin = "1899-12-30", tz = "America/Detroit")
+```
+
+###Select the useful columns
+```{r}
+#Select only needed columns
+exp <- exp %>% select(time, Bsp, Awa, Aws, Twa, Tws, Twd, Lat, Lon, Cog, Sog)
+
+#change names to lowercase for easier handling
+names(exp) <- tolower(names(exp))
+```
+
+###Remove Data from before and after the race
+```{r}
+#remove pre-start and post-finsih
+exp <- exp %>% dplyr::filter(time > as.POSIXct("2018-7-14 16:00:00"))
+
+exp <- exp %>% dplyr::filter(time < as.POSIXct("2018-07-17"))
+```
+
+
+
