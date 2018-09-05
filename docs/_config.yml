@@ -1,11 +1,11 @@
 theme: jekyll-theme-minimal
-    - text: "Summary"
-      href: index.html
-    - text: "Loading Yellowbrick"
-      href: yb.html
-    - text: "Scraping Results"
-      href: results.html
-    - text: "Loading Expedition"
-      href: exp.html
-    - text: "Dashboard"
-      href: dash.html
+text: "Summary"
+href: index.html
+text: "Loading Yellowbrick"
+href: yb.html
+text: "Scraping Results"
+href: results.html
+text: "Loading Expedition"
+href: exp.html
+text: "Dashboard"
+href: dash.html
