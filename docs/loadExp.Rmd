@@ -22,40 +22,106 @@ dat_folder <- "../raw_data/expedition_data"
 dat_files <- list.files(dat_folder, full.names = TRUE)
 
 #Read the csv files
-exp <- lapply(dat_files, read.csv, stringsAsFactors=FALSE)
-exp_raw <- do.call(rbind, exp)
+exp_raw <- lapply(dat_files, read.csv, stringsAsFactors=FALSE)
+exp_raw <- do.call(rbind, exp_raw)
 ```
 
 ##Cleaning Up The Data
 ###Removing Unneeded Columns
 The Expedition data contains many columns that do not contain any data. 
 ```{r}
-#remove any columns where the data is entirely NA
-allna <- which(apply(exp_raw, 2, function(x) all(is.na(x))))   #Find columns where all is not NA
+#Find columns where all is NA
+allna <- which(apply(exp_raw, 2, function(x) all(is.na(x))))   
 
-exp <- exp_raw %>% select(-allna)
+#remove those columns
+expdat <- exp_raw %>% select(-allna)
 ```
 
 ###Convert the time from Excel Format
 ```{r}
-exp$time <- as.POSIXct((exp$Utc) * (60*60*24), origin = "1899-12-30", tz = "America/Detroit")
+expdat$time <- as.POSIXct((expdat$Utc) * (60*60*24), origin = "1899-12-30", tz = "America/Detroit")
 ```
 
 ###Select the useful columns
+- *time*
+- *Bsp* = Boatspeed thru water
+- *Awa* = Apparent Wind Angle (Degrees Relative to boat)
+- *Aws* = Apparent Wind Speed (in knots)
+- *Twa* = True Wind Angle (Degrees Relative to boat)
+- *Tws* = True Wind Speed (in knots)
+- *Twd* = True Wind Direction (Bearing Relative to the Earth)
+- *Lat/Lon* = Position
+- *Cog* = Course Over Ground (Bearing in Degrees)
+- *Sog* = Speed Over Ground (in Knots)
 ```{r}
 #Select only needed columns
-exp <- exp %>% select(time, Bsp, Awa, Aws, Twa, Tws, Twd, Lat, Lon, Cog, Sog)
+expdat <- expdat %>% select(time, Bsp, Awa, Aws, Twa, Tws, Twd, Lat, Lon, Cog, Sog)
 
 #change names to lowercase for easier handling
-names(exp) <- tolower(names(exp))
+names(expdat) <- tolower(names(expdat))
+
+str(expdat)
 ```
 
 ###Remove Data from before and after the race
 ```{r}
 #remove pre-start and post-finsih
-exp <- exp %>% dplyr::filter(time > as.POSIXct("2018-7-14 16:00:00"))
+expdat <- expdat %>% dplyr::filter(time > as.POSIXct("2018-7-14 16:00:00"))
 
-exp <- exp %>% dplyr::filter(time < as.POSIXct("2018-07-17"))
+expdat <- expdat %>% dplyr::filter(time < as.POSIXct("2018-07-17"))
+
+head(expdat$time)
+```
+
+##Data Exploration
+### Basic Stats
+```{r}
+summary(expdat)
+```
+
+We can see there is a large number of NA's for most columns. The most important columns are apparent wind angle (awa), apparent wind speed (awa), boatspeed (bsp), and position (lat/lon). The remaining variables can be calculated from these values.  
+
+#where do we have AWS and AWA
+```{r}
+library(ggplot2)
+
+ggplot(expdat) + geom_point( aes(x=time, y=awa))
+ggplot(expdat) + geom_point(aes(x=time, y=aws))
+```
+We can see there are quite large chunks of data missing. These chunks are too large to interpolate over. We can also see some outlier data. We will handle these later. First, let's remove the chunks of data without AWA & AWS data so that we can fill in blank data for other variables. 
+
+We would like to remove any chunks of time where the AWA & AWS is missing for more than 10 seconds or so. So, first we'll fill in the missing data for any AWA & AWS with linear interpolation and then remove any offending NA data. 
+
+The Zoo package has a handy function for interpolating data. Thankfully, the na.approx function from the Zoo library has an argument to define the maximum gap to interpolate over. 
+
+```{r}
+library(zoo)
+
+awa_new <- na.approx(expdat$awa, x = expdat$time, maxgap = 30)
+aws_new <- na.approx(expdat$aws, x = expdat$time, maxgap = 30)
+
+#create a marker for the graph to show where the new data is created
+awa_new_data <- is.na(expdat$awa) & !is.na(awa_new)
+aws_new_data <- is.na(expdat$aws) & !is.na(aws_new)
+
+#apply the new data to the data frame
+expdat$awa <- awa_new
+expdat$aws <- aws_new
+
+testplotdf <- data.frame(time =expdat$time, awa_new, new_data = awa_new_data)
+
+#plot AWA data
+ggplot(testplotdf) + geom_point(aes(x=time, y=awa_new, color=awa_new_data))
+  
+
+
+```
+
+Now that we've filled in some smaller gaps, lets remove the large gaps where either the AWA or AWS is missing. 
+```{r}
+expdat <- expdat[!is.na(expdat$awa) & !is.na(expdat$aws), ]
+
+summary(expdat)
 ```
 
 
