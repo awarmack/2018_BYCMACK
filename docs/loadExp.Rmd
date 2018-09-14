@@ -387,4 +387,56 @@ ggplot(expdat) + geom_histogram(aes(x=degoffvmc), binwidth=5)+scale_x_continuous
 
 ```
 
+```{r}
+mimap + geom_point(data=expdat, aes(x=lon, y=lat, color=degoffvmc)) + scale_color_gradient2(mid="yellow")
+```
+
+```{r}
+mimap + geom_point(data=expdat[expdat$mark=="S3 TBLT", ], aes(x=lon, y=lat, color=twd)) + scale_color_gradient2(mid="yellow") + coord_map("mercator", xlim=c(-84, -82), ylim=c(44, 45))
+
+```
+
+#write the full data
+```{r}
+write.csv(expdat, "../mod_data/expdition_full.csv", row.names = FALSE)
+```
+
+
+#We need to summarize the data for printing. 
+```{r}
+library(lubridate)
+
+exp_5m <- expdat %>% 
+            mutate(time = round_date(time, unit = "5 mins")) %>% 
+            mutate(cog = fromNorth(cog)) %>%   #should average as degrees from north
+            group_by(time) %>% 
+            summarise_if(is.numeric, mean, na.rm=TRUE) %>%
+            mutate(cog = normbear(cog))
+
+exp_15m <- expdat %>% 
+            mutate(time = round_date(time, unit = "15 mins")) %>% 
+            mutate(cog = fromNorth(cog)) %>%   #should average as degrees from north
+            group_by(time) %>% 
+            summarise_if(is.numeric, mean, na.rm=TRUE) %>%
+            mutate(cog = normbear(cog))
+
+ggplot() + geom_point(data=expdat,aes(x=time, y=cog), color="blue" ) + geom_point(data=exp_5m, aes(x=time, y=cog))  
+
+#mimap + geom_point(data=exp_5m, aes(x=lon, y=lat))
+
+write.csv(exp_5m, "../mod_data/expdition_5minavg.csv", row.names = FALSE)
+write.csv(exp_15m, "../mod_data/expdition_15minavg.csv", row.names = FALSE)
+
+```
+
+```{r}
+exp_5m$twa_cut <- cut_number(abs(exp_5m$twa), 4)
+exp_5m$tws_cut <- cut_number(exp_5m$tws, 4)
+
+ggplot(exp_5m, aes(x=twa, y=bsp, color=tws_cut)) + 
+  geom_point()  + coord_polar(start = -pi) + facet_wrap(. ~ tws_cut)
+```
+
+
+
 
