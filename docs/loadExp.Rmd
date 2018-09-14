@@ -6,6 +6,7 @@ output: html_document
 ---
 
 ```{r setup, include=FALSE}
+rm(list=ls())
 knitr::opts_chunk$set(echo = TRUE)
 
 library(tidyverse)
@@ -26,6 +27,8 @@ exp_raw <- lapply(dat_files, read.csv, stringsAsFactors=FALSE)
 exp_raw <- do.call(rbind, exp_raw)
 ```
 
+
+
 ##Cleaning Up The Data
 ###Removing Unneeded Columns
 The Expedition data contains many columns that do not contain any data. 
@@ -36,6 +39,8 @@ allna <- which(apply(exp_raw, 2, function(x) all(is.na(x))))
 #remove those columns
 expdat <- exp_raw %>% select(-allna)
 ```
+
+
 
 ###Convert the time from Excel Format
 ```{r}
@@ -53,7 +58,7 @@ expdat$time <- as.POSIXct((expdat$Utc) * (60*60*24), origin = "1899-12-30", tz =
 - *Lat/Lon* = Position
 - *Cog* = Course Over Ground (Bearing in Degrees)
 - *Sog* = Speed Over Ground (in Knots)
-```{r}
+```{r, echo=TRUE}
 #Select only needed columns
 expdat <- expdat %>% select(time, Bsp, Awa, Aws, Twa, Tws, Twd, Lat, Lon, Cog, Sog)
 
@@ -64,7 +69,7 @@ str(expdat)
 ```
 
 ###Remove Data from before and after the race
-```{r}
+```{r, echo=TRUE}
 #remove pre-start and post-finsih
 expdat <- expdat %>% dplyr::filter(time > as.POSIXct("2018-7-14 16:00:00"))
 
@@ -85,44 +90,301 @@ We can see there is a large number of NA's for most columns. The most important 
 ```{r}
 library(ggplot2)
 
-ggplot(expdat) + geom_point( aes(x=time, y=awa))
-ggplot(expdat) + geom_point(aes(x=time, y=aws))
+expdat$index <- 1:nrow(expdat)
+
+ggplot(expdat) + geom_point( aes(x=index, y=awa))
+ggplot(expdat) + geom_point(aes(x=index, y=aws))
 ```
-We can see there are quite large chunks of data missing. These chunks are too large to interpolate over. We can also see some outlier data. We will handle these later. First, let's remove the chunks of data without AWA & AWS data so that we can fill in blank data for other variables. 
 
-We would like to remove any chunks of time where the AWA & AWS is missing for more than 10 seconds or so. So, first we'll fill in the missing data for any AWA & AWS with linear interpolation and then remove any offending NA data. 
 
-The Zoo package has a handy function for interpolating data. Thankfully, the na.approx function from the Zoo library has an argument to define the maximum gap to interpolate over. 
-
+##Calcuale TWD for missing variables
 ```{r}
-library(zoo)
-
-awa_new <- na.approx(expdat$awa, x = expdat$time, maxgap = 30)
-aws_new <- na.approx(expdat$aws, x = expdat$time, maxgap = 30)
-
-#create a marker for the graph to show where the new data is created
-awa_new_data <- is.na(expdat$awa) & !is.na(awa_new)
-aws_new_data <- is.na(expdat$aws) & !is.na(aws_new)
-
-#apply the new data to the data frame
-expdat$awa <- awa_new
-expdat$aws <- aws_new
-
-testplotdf <- data.frame(time =expdat$time, awa_new, new_data = awa_new_data)
-
-#plot AWA data
-ggplot(testplotdf) + geom_point(aes(x=time, y=awa_new, color=awa_new_data))
+fromNorth <- function(bearing){
+  bearing <- normbear(bearing)  #first convert to a normal bearing
   
+  fromNorth <- ifelse(bearing > 180, bearing-360, bearing)
+  fromNorth <- ifelse(fromNorth < -180, 360+fromNorth, fromNorth)
+  return(fromNorth)
+}
 
+normbear <- function(x){
+  #converts back to a normal bearing
+  x %% 360
+}
+
+getTWD <- function(twa, hdg){
+  #twa = TRUE WIND ANGLE
+  #hdg = Heading
+  hdg <- fromNorth(hdg)
+  twa <- fromNorth(twa)
+  
+  normbear(hdg + twa)
+  
+}
+
+missingtwd <- is.na(expdat$twd)
+
+expdat$twd[missingtwd] <- getTWD(expdat$twa[missingtwd] , hdg = expdat$sog[missingtwd] )
 
 ```
 
-Now that we've filled in some smaller gaps, lets remove the large gaps where either the AWA or AWS is missing. 
+Handle Outlier Data
 ```{r}
-expdat <- expdat[!is.na(expdat$awa) & !is.na(expdat$aws), ]
 
-summary(expdat)
+expdat$twa[expdat$twa > 180] <- NA
+expdat$tws[expdat$tws > 25]  <- NA
+expdat$bsp[expdat$bsp > 15]  <- NA
+expdat$sog[expdat$sog > 15]  <- NA
+
 ```
 
+
+##Calculate the performance to our polar
+The polar provides the optimal speed given an twa and tws.
+```{r}
+library(akima)
+
+load("../raw_data/polarmodel.rda")
+
+#get optimal boat speed at a given TWA (=btw)
+getOptV <- function(btw, vtw, pol.model){
+  
+  #returns Optimal Velocity at a given Bearing to Wind (BTW) and Wind Speed (VTW)
+  btw <- normbear(btw)
+  
+  btw <- fromNorth(btw)
+
+  btw <- abs(btw)
+  
+  #output the optimum Velocity for a given BTW and wind speed. 
+  v <- bilinear(x=pol.model$twa, y=pol.model$tws, z=pol.model$pol.matrix, x0=btw, y0=vtw)
+  
+  return(v$z)
+  
+}
+
+#note that this will only work if all of the input data is an actual number
+hasdata <- !is.na(expdat$twa) & !is.na(expdat$tws) & abs(expdat$twa)>40
+
+expdat$opt_v[hasdata] <- getOptV(btw=expdat$twa[hasdata], vtw = expdat$tws[hasdata], pol.model = pol.model)
+
+#Calculate the percentage of our polar
+expdat$pol_perc <- (expdat$bsp / expdat$opt_v) * 100
+
+
+
+```
+
+```{r}
+expdat <- na.omit(expdat)
+
+expdat <- expdat[abs(expdat$twa)!=180, ]
+```
+
+
+```{r}
+#histogram of our performance
+ggplot(expdat) + geom_histogram(aes(x=expdat$pol_perc), bins=50)
+
+```
+
+```{r}
+ggplot(expdat) + 
+  geom_point(aes(x=twa, y=pol_perc)) + 
+  scale_x_continuous(limits=c(-180, 180))+
+  scale_y_continuous(limits=c(100,250))
+```
+
+```{r}
+ggplot(expdat) + 
+  geom_point(aes(x=tws, y=pol_perc), alpha=0.1) + 
+  scale_x_continuous(limits=c(0, 20)) + 
+  scale_y_continuous(limits=c(0, 500)) + 
+  geom_hline(aes(yintercept=100), color="green")
+
+```
+
+
+```{r}
+
+ggplot(expdat) + geom_point(aes(x=tws, y=bsp), alpha=0.1) + geom_point(data=pol, aes(x=tws, y=opt_v, group=tws), color="red" )
+
+```
+
+```{r}
+ggplot(expdat) + 
+  geom_point(aes(x=twa, y=bsp, color=pol_perc), alpha=0.1)+
+  geom_path(data=pol, aes(x=twa, y=opt_v, group=tws), color="red" ) +
+  scale_color_gradient2(midpoint = 100, mid="green", low="yellow", high="blue", limits=c(50,150))+
+  coord_polar(start = -pi)
+```
+
+
+```{r}
+expdat$twa_cut <- cut_number(abs(expdat$twa), 4)
+expdat$tws_cut <- cut_number(expdat$tws, 4)
+
+ggplot(expdat) + 
+  geom_histogram(aes(x=pol_perc), binwidth=2)+
+  scale_x_continuous(limits=c(0,150))+
+  facet_grid(tws_cut ~ twa_cut)
+```
+
+#Calculating Optimum VMC
+
+## Calculate bearing to the mark
+
+### Load Marks
+```{r}
+marks <- read.csv("../raw_data/marks.csv", stringsAsFactors = FALSE)
+marks
+```
+
+```{r}
+whichMark <- function(lat, marks, returns="mark"){
+  
+  if(lat > max(marks$lat)){
+    #If the lat is greater than the maximum latitude of all marks, return the last mark
+    return(marks[nrow(marks), returns])
+  }
+  
+  #Else return the first mark that has a lat greater than the current position
+  mark <- marks[min(which(lat < marks$lat)), returns]
+  return(mark)
+}
+
+expdat$mark <- sapply(expdat$lat, whichMark, marks, returns="mark")
+expdat$markLat <- as.numeric(sapply(expdat$lat, whichMark, marks, returns="lat"))
+expdat$markLon <- as.numeric(sapply(expdat$lat, whichMark, marks, returns="lon"))
+```
+
+
+```{r}
+#get states shape files
+mi <- map_data("state") %>% filter(region=="michigan")
+
+mimap <- ggplot()+
+          geom_polygon(data=mi, aes(long, lat, group=group)) + 
+          coord_map("mercator", xlim=c(-85, -82), ylim=c(42.8, 46))
+
+mimap + geom_point(data=expdat, aes(x = lon, y=lat, color=mark))
+
+```
+
+#get the bearing to the mark
+```{r}
+library(geosphere)
+
+##Calculate Bearing to the Mark
+p1 <- expdat[, c("lon", "lat")]
+p2 <- expdat[, c("markLon", "markLat")]
+  
+expdat$btm <- bearingRhumb(p1, p2)
+
+```
+
+
+#Calculating Optimum VMC
+```{r}
+getVMC <- function(btm, cog, bsp){
+  #given a bearing to the mark (BTM) and course over ground(COG)
+  # what is the vmc being made towards the mark
+  
+  #get angle between btm and cog
+  angle <- fromNorth(cog) - fromNorth(btm)
+  
+  vmc <- bsp * cos(angle*(pi/180))
+  
+  return(vmc)
+  
+}
+
+getTWA <- function(btm, twd){
+  #twd <- fromNorth(twd)
+  #btm <- fromNorth(btm)
+  
+  fromNorth(twd-btm)
+  
+}
+
+optvmc <- function(btm, twd, tws, pol.model){
+  #BTM = Bearing to Mark (0-360)
+  #TWD = True Wind Direction (0-360)
+  #
+  
+  col_names <-  c("btm", "twd", "tws", "opt_twa", "opt_bear", "degoffmark", "opt_bsp", "opt_vmc", "vmc_gain")
+  
+  if(any(is.na(c(btm, twd, tws)))){ 
+    
+    na_row <- as.data.frame(matrix(NA, nrow=1, ncol=9))
+    names(na_row) <- col_names
+    
+    return(na_row)
+  }
+  
+  
+  btm <- normbear(btm)
+  twd <- normbear(twd)
+  
+  #nominal TWA (pointing at mark) where 0 at the wind
+  ntwa <- getTWA(btm, twd)
+  
+  #create vector of angles off the mark (0 at the wind)
+  off_mark <- seq(-50,50, by=1)         #degrees away from the mark + = Stbd
+  twa_s <- fromNorth(ntwa + off_mark)   #twa at each degree off the mark
+  
+  #bearings of each test position (actual direction of optimal VMC)
+  opt_bear <- normbear(btm - off_mark)
+  
+  tws <- rep(tws, length(twa_s))
+  
+  #get BSP at each twa
+  bsp <- getOptV(twa_s, vtw = tws, pol.model)
+  
+  #get vmc at each angle off mark
+  vmc <- bsp * cos(off_mark*(pi/180))
+  
+  #find max VMC
+  vmcopt <- max(vmc)
+  
+  #find gain
+  if(abs(ntwa) < 40){  ntwa <- 40 }   #if we're on a beat, assume close hulled
+  
+  vmc_gain <- vmcopt - getOptV(ntwa, vtw=tws[1], pol.model)
+  
+  opt <- data.frame(btm, twd, tws, twa_s, opt_bear, off_mark, bsp, vmc, vmc_gain)
+  names(opt) <- col_names
+  
+  return_opt <- head(opt[which(vmcopt==vmc), ], 1)   #only return one value if there are more than 1
+  
+  return(return_opt)
+  
+}
+
+optimalcourse <- mapply(FUN = optvmc, expdat$btm, expdat$twd, expdat$tws, MoreArgs = list(pol.model), SIMPLIFY = FALSE)
+
+optimalcourse <- do.call(bind_rows, optimalcourse)
+  
+expdat <- bind_cols(expdat, optimalcourse[, 4:9])
+
+```
+
+#Summary of VMC vs. path sailed
+```{r}
+
+expdat$vmc <- getVMC(expdat$btm, cog=expdat$cog, bsp = expdat$bsp)
+
+expdat$off_vmc <- expdat$vmc - expdat$opt_vmc
+
+ggplot(expdat) + geom_histogram(aes(x=off_vmc))+scale_x_continuous(name="Actual VMC Vs. Optimal VMC [kts]")
+
+```
+
+```{r}
+expdat$degoffvmc <- expdat$twa - expdat$opt_twa
+
+ggplot(expdat) + geom_histogram(aes(x=degoffvmc), binwidth=5)+scale_x_continuous(name="Degrees from Optimal VMC angle")
+
+```
 
 
