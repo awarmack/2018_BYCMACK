@@ -6,9 +6,9 @@ library(tidyverse)
 library(scales)
 #library(viridis)
 
-load("../../mod_data/positions_wcorr.Rdata")
-exp <- read.csv("../../mod_data/expdition_5minavg.csv", stringsAsFactors = FALSE)
-
+load("positions_wcorr.Rdata")
+exp <- read.csv("expdition_5minavg.csv", stringsAsFactors = FALSE)
+exp$pol_perc[is.infinite(exp$pol_perc)]<-NA
 
 posn <- posn %>% filter(class=="Class O Class")
 
@@ -138,7 +138,7 @@ server <- function(input, output, session) {
     posn <- posn[posn$boat == "Zubenelgenubi" | posn$boat == input$vsboat,  ]
     
     ggplot(posn)+
-      geom_density(aes(x=SOG, fill=boat), alpha=0.2)+
+      geom_histogram(aes(x=SOG, fill=boat), alpha=0.4, bins=50)+
       theme(legend.position="none")+
       scale_fill_manual(values=c("red", "blue"))
     
@@ -149,15 +149,15 @@ server <- function(input, output, session) {
 
     zube <- zube[zube$twa < 180, ]
 
-    zube$brks <- cut(zube$pol_perc, breaks=c(0, 50, 75, 100, 125, 150))
-
+    #zube$brks <- cut(zube$pol_perc, breaks=c(0, 50, 75, 100, 125, 150))
     #zube$brks<- cut_number(zube$pol_perc, n = 5)
     #zube$brks<- str_replace(zube$brks, pattern = "\\,", replacement = "~")
 
+    colorRange <- quantile(zube$pol_perc, c(0.1, .99), na.rm=TRUE)
 
-    ggplot(zube)+geom_point(aes(x=twa, y=sog, color=brks))+
+    ggplot(zube)+geom_point(aes(x=twa, y=sog, color=pol_perc))+
       #scale_color_brewer(type = "div")+
-      scale_color_viridis_d()+
+      scale_color_viridis_c(limits=colorRange)+
       scale_x_continuous(limits=c(-180,180))+
       coord_polar(start=pi)
   })
